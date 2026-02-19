@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.tarea01"
+    namespace = "com.example.tarea01_reque"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -11,8 +11,8 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.tarea01"
-        minSdk = 34
+        applicationId = "com.example.tarea01_reque"
+        minSdk = 36
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
