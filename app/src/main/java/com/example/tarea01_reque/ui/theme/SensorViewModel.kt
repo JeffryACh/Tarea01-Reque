@@ -1,5 +1,6 @@
-package com.example.tarea01_reque.ui.theme // Ajusta el paquete según tu estructura
+package com.example.tarea01_reque.ui.theme
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -15,78 +16,51 @@ class SensorViewModel(
     private val gravitySensorHelper: GravitySensorHelper
 ) : ViewModel() {
 
-    // 1. ESTADO: Número de Emergencia
     private val _emergencyNumber = MutableStateFlow("")
-    val emergencyNumber: StateFlow<String> = _emergencyNumber.asStateFlow()
+    val emergencyNumber = _emergencyNumber.asStateFlow()
 
-    // 2. ESTADO: Modo Vigilancia (Switch on/off)
+    private val _contactName = MutableStateFlow("")
+    val contactName = _contactName.asStateFlow()
+
     private val _isSurveillanceActive = MutableStateFlow(false)
-    val isSurveillanceActive: StateFlow<Boolean> = _isSurveillanceActive.asStateFlow()
+    val isSurveillanceActive = _isSurveillanceActive.asStateFlow()
 
-    // 3. ESTADO: Alarma Disparada (para cambiar el color de la pantalla)
     private val _isAlarmTriggered = MutableStateFlow(false)
-    val isAlarmTriggered: StateFlow<Boolean> = _isAlarmTriggered.asStateFlow()
+    val isAlarmTriggered = _isAlarmTriggered.asStateFlow()
 
     init {
-        // Al inicializarse, comenzamos a escuchar el DataStore automáticamente
         viewModelScope.launch {
-            dataStoreManager.emergencyNumberFlow.collect { number ->
-                _emergencyNumber.value = number
-            }
+            dataStoreManager.emergencyNumberFlow.collect { _emergencyNumber.value = it }
         }
-
-        // Escuchamos el sensor de hardware en tiempo real
         viewModelScope.launch {
-            gravitySensorHelper.fallDetectionFlow.collect { fallDetected ->
-                // Si detecta caída y el modo vigilancia está activo, cambiamos el estado de la UI
-                if (fallDetected && _isSurveillanceActive.value) {
+            dataStoreManager.contactNameFlow.collect { _contactName.value = it }
+        }
+        viewModelScope.launch {
+            // Se conecta al flujo de caída del GravitySensorHelper
+            gravitySensorHelper.fallDetectionFlow.collect { fell ->
+                if (_isSurveillanceActive.value && fell && !_isAlarmTriggered.value) {
                     _isAlarmTriggered.value = true
                 }
             }
         }
     }
 
-    /**
-     * Guarda el número en la persistencia local.
-     */
-    fun saveEmergencyNumber(number: String) {
+    fun saveInfo(number: String, name: String) {
         viewModelScope.launch {
-            dataStoreManager.saveEmergencyNumber(number)
+            // Sanitización: Remueve espacios, paréntesis y guiones para que el SMS no falle
+            val cleanNumber = number.replace(Regex("[^0-9+]"), "")
+            Log.d("SafeWalk", "Guardando - Original: $number -> Limpio: $cleanNumber")
+            dataStoreManager.saveContactInfo(cleanNumber, name)
         }
     }
 
-    /**
-     * Activa o desactiva el Modo Vigilancia en la interfaz.
-     */
-    fun toggleSurveillance(isActive: Boolean) {
-        _isSurveillanceActive.value = isActive
-        if (!isActive) {
-            // Si apagamos la vigilancia, reseteamos la alarma visual
-            _isAlarmTriggered.value = false
-        }
-    }
-
-    /**
-     * Simula el botón de pánico manual o resetea la alarma visual.
-     */
-    fun setAlarmTriggered(isTriggered: Boolean) {
-        _isAlarmTriggered.value = isTriggered
-    }
+    fun toggleSurveillance(active: Boolean) { _isSurveillanceActive.value = active }
+    fun setAlarmTriggered(triggered: Boolean) { _isAlarmTriggered.value = triggered }
 }
 
-/**
- * Como el ViewModel recibe parámetros en su constructor (DataStore y SensorHelper),
- * Android necesita un "Factory" (Fábrica) para saber cómo instanciarlo.
- */
 class SensorViewModelFactory(
-    private val dataStoreManager: DataStoreManager,
-    private val gravitySensorHelper: GravitySensorHelper
+    private val ds: DataStoreManager,
+    private val gs: GravitySensorHelper
 ) : ViewModelProvider.Factory {
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(SensorViewModel::class.java)) {
-            @Suppress("UNCHECKED_CAST")
-            return SensorViewModel(dataStoreManager, gravitySensorHelper) as T
-        }
-        throw IllegalArgumentException("Unknown ViewModel class")
-    }
+    override fun <T : ViewModel> create(modelClass: Class<T>): T = SensorViewModel(ds, gs) as T
 }

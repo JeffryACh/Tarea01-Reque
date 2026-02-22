@@ -1,6 +1,5 @@
 package com.example.tarea01_reque.services
 
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -29,192 +28,177 @@ class FallDetectionService : Service(), SensorEventListener {
 
     private lateinit var sensorManager: SensorManager
     private var accelerometer: Sensor? = null
+    private var emergencyNumber: String? = null
 
-    // Variables de estado
-    private var isCountingDown = false
-    private var emergencyNumber: String = ""
-
-    // Corrutinas para manejar la cuenta regresiva sin bloquear la app
+    // Corrutina para la cuenta regresiva de 10 segundos pedida en la Prueba de Campo
     private val serviceScope = CoroutineScope(Dispatchers.Default)
     private var countdownJob: Job? = null
+    private var isAlarmTriggered = false
 
     companion object {
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
         const val ACTION_CANCEL_ALARM = "ACTION_CANCEL_ALARM"
+        const val ACTION_TRIGGER_PANIC = "ACTION_TRIGGER_PANIC" // <-- Nueva acción agregada
         const val EXTRA_PHONE_NUMBER = "EXTRA_PHONE_NUMBER"
 
+        private const val NOTIFICATION_CHANNEL_ID = "SafeWalkChannel"
         private const val NOTIFICATION_ID = 1
-        private const val CHANNEL_ID = "SafeWalkChannel"
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onCreate() {
+        super.onCreate()
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        createNotificationChannel()
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                emergencyNumber = intent.getStringExtra(EXTRA_PHONE_NUMBER) ?: ""
-                startSurveillance()
+                emergencyNumber = intent.getStringExtra(EXTRA_PHONE_NUMBER)
+                startForegroundService()
+                startSensor()
             }
-            ACTION_CANCEL_ALARM -> {
-                cancelCountdown()
+            ACTION_TRIGGER_PANIC -> {
+                emergencyNumber = intent.getStringExtra(EXTRA_PHONE_NUMBER)
+                startForegroundService()
+                // Si la alarma no se ha disparado ya, iniciamos la cuenta regresiva y el SMS
+                if (!isAlarmTriggered) {
+                    triggerFallCountdown()
+                }
             }
             ACTION_STOP -> {
-                stopSurveillance()
+                stopSensor()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+            ACTION_CANCEL_ALARM -> {
+                cancelAlarm()
             }
         }
-        return START_STICKY // Asegura que el servicio se reinicie si el sistema lo mata
+        return START_STICKY
     }
 
-    private fun startSurveillance() {
-        createNotificationChannel()
-        val notification = buildNotification("Modo Vigilancia Activado", "Protegiéndote en segundo plano...")
+    private fun startForegroundService() {
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle("SafeWalk Activo")
+            .setContentText("Modo vigilancia activado. Protegiéndote en segundo plano.")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
 
-        // Iniciar en primer plano para evitar las restricciones de batería de Samsung
         startForeground(NOTIFICATION_ID, notification)
+    }
 
-        // Configurar el sensor
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-
+    private fun startSensor() {
         accelerometer?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
         }
     }
 
-    private fun stopSurveillance() {
+    private fun stopSensor() {
         sensorManager.unregisterListener(this)
-        cancelCountdown()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        cancelAlarm()
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
-        if (event?.sensor?.type == Sensor.TYPE_ACCELEROMETER && !isCountingDown) {
+        if (event?.sensor?.type == Sensor.TYPE_ACCELEROMETER && !isAlarmTriggered) {
             val x = event.values[0]
             val y = event.values[1]
             val z = event.values[2]
 
-            // Fórmula solicitada en el documento: magnitud del vector fuerza G
+            // Cálculo Técnico de la Rúbrica: Magnitud de la fuerza G
             val gForce = sqrt((x * x + y * y + z * z).toDouble())
 
-            // Umbral de 30 m/s^2 exigido en la tarea
+            // Desafío: Si supera los 30 m/s^2, se dispara la alerta de caída
             if (gForce > 30.0) {
-                triggerFallDetected()
+                triggerFallCountdown()
             }
         }
     }
 
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        // No es necesario implementar para el acelerómetro en este caso
-    }
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
-    private fun triggerFallDetected() {
-        isCountingDown = true
-        Log.d("SafeWalk", "¡Caída detectada! Iniciando cuenta regresiva...")
-
-        // Actualizar notificación para alertar al usuario
-        updateNotification("¡Caída Detectada!", "Enviando SMS en 10 segundos...")
+    /**
+     * Inicia la cuenta regresiva de 10 segundos antes de enviar el SMS
+     */
+    private fun triggerFallCountdown() {
+        isAlarmTriggered = true
+        Log.d("SafeWalk", "¡Emergencia detectada! Iniciando cuenta regresiva.")
 
         countdownJob = serviceScope.launch {
-            // Cuenta regresiva de 10 segundos
-            for (i in 10 downTo 1) {
-                delay(1000)
-                Log.d("SafeWalk", "Alerta en $i...")
-            }
-
-            // Si llegamos aquí y la corrutina no fue cancelada, se ejecuta la alarma
-            executeEmergencyProtocol()
+            delay(10000) // Espera 10 segundos
+            executeEmergencyProtocol() // Si no se canceló en 10s, envía el SMS
         }
     }
 
-    private fun cancelCountdown() {
-        if (isCountingDown) {
-            countdownJob?.cancel()
-            isCountingDown = false
-            updateNotification("Modo Vigilancia Activado", "Falsa alarma cancelada. Todo en orden.")
-            Log.d("SafeWalk", "Cuenta regresiva cancelada por el usuario.")
-        }
+    /**
+     * Función llamada cuando el usuario presiona "Cancelar Alarma" en la interfaz
+     */
+    private fun cancelAlarm() {
+        countdownJob?.cancel()
+        countdownJob = null
+        isAlarmTriggered = false
+        Log.d("SafeWalk", "Alarma de SMS cancelada por el usuario.")
     }
 
+    /**
+     * Vibración del dispositivo y uso de SmsManager para despachar el mensaje.
+     */
     private fun executeEmergencyProtocol() {
-        isCountingDown = false
-
-        // 1. Vibrar
         vibratePhone()
 
-        // 2. Enviar SMS usando el hardware nativo
-        sendSms()
+        emergencyNumber?.let { number ->
+            sendSms(number)
+        }
 
-        // Actualizar UI
-        updateNotification("Alerta Enviada", "Se ha enviado un SMS al contacto de emergencia.")
+        // Resetea para seguir vigilando después de enviar la alerta
+        isAlarmTriggered = false
     }
 
     private fun vibratePhone() {
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-            vibratorManager.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val vibrator = vibratorManager.defaultVibrator
             vibrator.vibrate(VibrationEffect.createOneShot(1500, VibrationEffect.DEFAULT_AMPLITUDE))
         } else {
+            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
             @Suppress("DEPRECATION")
             vibrator.vibrate(1500)
         }
     }
 
-    private fun sendSms() {
-        if (emergencyNumber.isNotEmpty()) {
-            try {
-                val smsManager: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    getSystemService(SmsManager::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    SmsManager.getDefault()
-                }
-
-                val message = "¡EMERGENCIA! El sistema SafeWalk ha detectado una posible caída o impacto. Por favor, contáctame de inmediato."
-                smsManager.sendTextMessage(emergencyNumber, null, message, null, null)
-                Log.d("SafeWalk", "SMS enviado exitosamente a $emergencyNumber")
-            } catch (e: Exception) {
-                Log.e("SafeWalk", "Error al enviar SMS: ${e.message}")
+    private fun sendSms(phoneNumber: String) {
+        try {
+            val smsManager: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                getSystemService(SmsManager::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                SmsManager.getDefault()
             }
+
+            val message = "¡EMERGENCIA! El usuario de SafeWalk ha detectado una caída peligrosa o requiere asistencia inmediata."
+
+            smsManager.sendTextMessage(phoneNumber, null, message, null, null)
+            Log.d("SafeWalk", "SMS enviado con éxito a $phoneNumber")
+
+        } catch (e: Exception) {
+            Log.e("SafeWalk", "Error al enviar el SMS: ${e.message}")
         }
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Servicio de Vigilancia SafeWalk",
-                NotificationManager.IMPORTANCE_HIGH // Importancia alta para que se vea claramente
-            ).apply {
-                description = "Monitorea el acelerómetro en busca de caídas"
-            }
+                NOTIFICATION_CHANNEL_ID,
+                "SafeWalk Service",
+                NotificationManager.IMPORTANCE_LOW
+            )
             val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            manager?.createNotificationChannel(channel)
         }
     }
 
-    private fun buildNotification(title: String, content: String): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(content)
-            // IMPORTANTE: Asegúrate de tener el ícono correcto en res/drawable,
-            // puedes cambiar ic_launcher_foreground por un ícono tuyo
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setOngoing(true)
-            .build()
-    }
-
-    private fun updateNotification(title: String, content: String) {
-        val notification = buildNotification(title, content)
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, notification)
-    }
+    override fun onBind(intent: Intent?): IBinder? = null
 }

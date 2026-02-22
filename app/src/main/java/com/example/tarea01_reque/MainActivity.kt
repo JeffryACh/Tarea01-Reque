@@ -59,6 +59,10 @@ class MainActivity : ComponentActivity() {
                         },
                         onCancelAlarm = {
                             cancelFallAlarm()
+                        },
+                        // NUEVO: Callback específico para el botón de pánico manual
+                        onTriggerPanic = { emergencyNumber ->
+                            triggerPanicAlarm(emergencyNumber)
                         }
                     )
                 }
@@ -72,7 +76,7 @@ class MainActivity : ComponentActivity() {
     private fun requestPermissions() {
         val permissionsToRequest = mutableListOf(Manifest.permission.SEND_SMS)
 
-        // Si el dispositivo tiene Android 13 (Tiramisu) o superior (como tu Android 16),
+        // Si el dispositivo tiene Android 13 (Tiramisu) o superior,
         // necesitamos permiso para mostrar la notificación persistente del servicio.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -82,7 +86,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Inicia el servicio en segundo plano que mantiene el sensor vivo
+     * Inicia el servicio en segundo plano que mantiene el sensor vivo (Modo Vigilancia)
      */
     private fun startFallDetectionService(emergencyNumber: String) {
         if (emergencyNumber.isBlank()) {
@@ -97,6 +101,28 @@ class MainActivity : ComponentActivity() {
         }
 
         // Iniciar como Foreground Service en versiones modernas
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+    }
+
+    /**
+     * NUEVO: Dispara explícitamente la alarma y la cuenta regresiva desde el botón de pánico
+     */
+    private fun triggerPanicAlarm(emergencyNumber: String) {
+        if (emergencyNumber.isBlank()) {
+            Toast.makeText(this, "Por favor, guarda un número de emergencia primero.", Toast.LENGTH_SHORT).show()
+            viewModel.setAlarmTriggered(false) // Resetea la pantalla si no hay número
+            return
+        }
+
+        val serviceIntent = Intent(this, FallDetectionService::class.java).apply {
+            action = FallDetectionService.ACTION_TRIGGER_PANIC
+            putExtra(FallDetectionService.EXTRA_PHONE_NUMBER, emergencyNumber)
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent)
         } else {
