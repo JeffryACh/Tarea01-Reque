@@ -5,13 +5,14 @@ plugins {
 
 android {
     namespace = "com.example.tarea01_reque"
-    // Usamos 35 o 36 dependiendo de la versión estable del SDK que tengas descargada
-    compileSdk = 35
+
+    // --- CAMBIAR ESTO A 36 ---
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.tarea01_reque"
-        minSdk = 26  // Permite instalar la app en el 99% de los teléfonos modernos
-        targetSdk = 36 // Optimizado para Android 16
+        minSdk = 26
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
