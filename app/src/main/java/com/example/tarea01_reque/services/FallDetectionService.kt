@@ -1,23 +1,16 @@
 package com.example.tarea01_reque.services
 
-import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.IBinder
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -34,7 +27,6 @@ class FallDetectionService : Service(), SensorEventListener {
     private var accelerometer: Sensor? = null
     private var emergencyNumber: String? = null
 
-    // Corrutina para la cuenta regresiva de 10 segundos pedida en la Prueba de Campo
     private val serviceScope = CoroutineScope(Dispatchers.Default)
     private var countdownJob: Job? = null
     private var isAlarmTriggered = false
@@ -48,7 +40,6 @@ class FallDetectionService : Service(), SensorEventListener {
 
         private const val NOTIFICATION_CHANNEL_ID = "SafeWalkChannel"
         private const val NOTIFICATION_ID = 1
-        private const val SMS_SENT_ACTION = "SMS_SENT"
     }
 
     override fun onCreate() {
@@ -62,37 +53,22 @@ class FallDetectionService : Service(), SensorEventListener {
         when (intent?.action) {
             ACTION_START -> {
                 emergencyNumber = intent.getStringExtra(EXTRA_PHONE_NUMBER)
-                startForegroundService()
+                startForeground(NOTIFICATION_ID, createNotification())
                 startSensor()
             }
             ACTION_TRIGGER_PANIC -> {
                 emergencyNumber = intent.getStringExtra(EXTRA_PHONE_NUMBER)
-                startForegroundService()
-                if (!isAlarmTriggered) {
-                    triggerFallCountdown()
-                }
+                startForeground(NOTIFICATION_ID, createNotification())
+                if (!isAlarmTriggered) triggerFallCountdown()
             }
             ACTION_STOP -> {
                 stopSensor()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
-            ACTION_CANCEL_ALARM -> {
-                cancelAlarm()
-            }
+            ACTION_CANCEL_ALARM -> cancelAlarm()
         }
         return START_STICKY
-    }
-
-    private fun startForegroundService() {
-        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("SafeWalk Activo")
-            .setContentText("Modo vigilancia activado. Protegiéndote en segundo plano.")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-
-        startForeground(NOTIFICATION_ID, notification)
     }
 
     private fun startSensor() {
@@ -108,15 +84,8 @@ class FallDetectionService : Service(), SensorEventListener {
 
     override fun onSensorChanged(event: SensorEvent?) {
         if (event?.sensor?.type == Sensor.TYPE_ACCELEROMETER && !isAlarmTriggered) {
-            val x = event.values[0]
-            val y = event.values[1]
-            val z = event.values[2]
-
-            // Cálculo Técnico: Magnitud de la fuerza G (Requisito Fase 2)
-            val gForce = sqrt((x * x + y * y + z * z).toDouble())
-
-            // Desafío: Si supera los 30 m/s^2, se dispara la alerta de caída
-            if (gForce > 30.0) {
+            val gForce = sqrt(event.values.map { it * it }.sum().toDouble())
+            if (gForce > 30.0) { // Umbral técnico del PDF
                 triggerFallCountdown()
             }
         }
@@ -126,85 +95,29 @@ class FallDetectionService : Service(), SensorEventListener {
 
     private fun triggerFallCountdown() {
         isAlarmTriggered = true
-        Log.d("SafeWalk", "¡Emergencia detectada! Iniciando cuenta regresiva.")
-
+        Log.d("SafeWalk", "¡Emergencia! Iniciando cuenta regresiva de 10s.")
         countdownJob = serviceScope.launch {
-            delay(10000) // Cuenta regresiva de 10 segundos (Prueba de Campo)
+            delay(10000)
             executeEmergencyProtocol()
         }
     }
 
     private fun cancelAlarm() {
         countdownJob?.cancel()
-        countdownJob = null
         isAlarmTriggered = false
-        Log.d("SafeWalk", "Alarma de SMS cancelada por el usuario.")
+        Log.d("SafeWalk", "Envío de SMS cancelado.")
     }
 
     private fun executeEmergencyProtocol() {
-        vibratePhone()
-
-        emergencyNumber?.let { number ->
-            sendSms(number)
-        }
-
+        emergencyNumber?.let { sendSms(it) }
         isAlarmTriggered = false
     }
 
-    private fun vibratePhone() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-            val vibrator = vibratorManager.defaultVibrator
-            vibrator.vibrate(VibrationEffect.createOneShot(1500, VibrationEffect.DEFAULT_AMPLITUDE))
-        } else {
-            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(1500)
-        }
-    }
-
     /**
-     * Función mejorada: Monitorea el estado real del envío del SMS
+     * Envío de SMS inspirado en el video
+     * pero optimizado para evitar el "Fallo Genérico" (Problemas 3 y 5)
      */
     private fun sendSms(phoneNumber: String) {
-        val sentPI = PendingIntent.getBroadcast(
-            this,
-            0,
-            Intent(SMS_SENT_ACTION),
-            PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Registrar receptor para capturar el resultado real de la operadora
-        val sentReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                when (resultCode) {
-                    Activity.RESULT_OK ->
-                        Log.d("SafeWalk", "¡SMS ENTREGADO A LA RED!")
-                    SmsManager.RESULT_ERROR_GENERIC_FAILURE ->
-                        Log.e("SafeWalk", "Fallo Genérico (Probablemente falta de saldo)")
-                    SmsManager.RESULT_ERROR_NO_SERVICE ->
-                        Log.e("SafeWalk", "Sin señal de celular")
-                    SmsManager.RESULT_ERROR_NULL_PDU ->
-                        Log.e("SafeWalk", "Error en el formato del mensaje")
-                    SmsManager.RESULT_ERROR_RADIO_OFF ->
-                        Log.e("SafeWalk", "Modo avión activado")
-                }
-                // Desregistrar para evitar fugas de memoria
-                try {
-                    context?.unregisterReceiver(this)
-                } catch (e: Exception) {
-                    Log.e("SafeWalk", "Error al desregistrar: ${e.message}")
-                }
-            }
-        }
-
-        // Compatibilidad con Android 14+ para receptores dinámicos
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(sentReceiver, IntentFilter(SMS_SENT_ACTION), Context.RECEIVER_EXPORTED)
-        } else {
-            registerReceiver(sentReceiver, IntentFilter(SMS_SENT_ACTION))
-        }
-
         try {
             val smsManager: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 getSystemService(SmsManager::class.java)
@@ -213,24 +126,31 @@ class FallDetectionService : Service(), SensorEventListener {
                 SmsManager.getDefault()
             }
 
-            val message = "¡EMERGENCIA! El usuario de SafeWalk ha detectado una caída peligrosa o requiere asistencia inmediata."
+            val message = "¡EMERGENCIA! Usuario de SafeWalk requiere asistencia inmediata."
 
-            smsManager.sendTextMessage(phoneNumber, null, message, sentPI, null)
+            // Solución al problema 5: Dividir el mensaje si es complejo
+            val parts = smsManager.divideMessage(message)
+
+            // Envío directo (similar a null, null del video pero más robusto)
+            smsManager.sendMultipartTextMessage(phoneNumber, null, parts, null, null)
+
+            Log.d("SafeWalk", "SMS despachado hacia la red para el número: $phoneNumber")
 
         } catch (e: Exception) {
-            Log.e("SafeWalk", "Error al intentar despachar: ${e.message}")
+            Log.e("SafeWalk", "Error crítico en sendSms: ${e.message}")
         }
     }
 
+    private fun createNotification() = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+        .setContentTitle("SafeWalk Vigilando")
+        .setContentText("Protección activa en segundo plano.")
+        .setSmallIcon(android.R.drawable.ic_dialog_alert)
+        .build()
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                "SafeWalk Service",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(channel)
+            val channel = NotificationChannel(NOTIFICATION_CHANNEL_ID, "SafeWalk", NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
